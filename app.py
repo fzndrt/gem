@@ -7,10 +7,10 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="IDX Ultimate Hunter", layout="wide", page_icon="🦅")
+st.set_page_config(page_title="IDX Full Market Hunter", layout="wide", page_icon="🎯")
 
 # ============================================================
-# 1. KONFIGURASI KEAMANAN & TELEGRAM
+# KONFIGURASI KEAMANAN & TELEGRAM
 # ============================================================
 try:
     TELEGRAM_TOKEN = st.secrets["TELEGRAM_TOKEN"]
@@ -30,7 +30,7 @@ def send_telegram_alert(message):
         pass
 
 # ============================================================
-# 2. DATA ENGINES (Optimized for Speed)
+# DATA ENGINES (Otomatis Tarik Seluruh Saham BEI)
 # ============================================================
 @st.cache_resource
 def init_tv():
@@ -41,15 +41,27 @@ tv = init_tv()
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_all_idx_tickers():
+    """Mengambil 900+ kode saham BEI dari database publik"""
+    tickers = []
+    # Jalur 1: HuggingFace API
     try:
         url = "https://datasets-server.huggingface.co/rows?dataset=kjhq/Indonesia-Stock-Symbols-and-Metadata&config=default&split=train&offset=0&length=1000"
         r = requests.get(url, timeout=10)
         rows = r.json()["rows"]
         tickers = [x["row"]["ticker"].upper().replace(".JK", "") for x in rows if len(x["row"]["ticker"].replace(".JK", "")) == 4]
-        return list(set(tickers))
     except:
-        fallback = "AALI ABMM ACES ADRO AKRA AMMN ANTM ARTO ASII BBCA BBNI BBRI BMRI BREN BRPT BUMI CUAN DCII ENRG ESSA GOTO HRUM ICBP INCO INDF INTP ITMG KLBF MDKA MEDC MGLV PANI PGAS PTBA SMGR TLKM TOWR UNTR WIKA"
-        return fallback.split()
+        pass
+
+    # Jalur 2: Fallback GitHub Public CSV jika API di atas sibuk
+    if len(tickers) < 500:
+        try:
+            url_backup = "https://raw.githubusercontent.com/yunanp/id-stock-ticker/main/tickers.csv"
+            df = pd.read_csv(url_backup)
+            tickers = [str(t).upper().replace(".JK", "") for t in df.iloc[:, 0].tolist() if len(str(t).replace(".JK", "")) == 4]
+        except:
+            pass
+            
+    return list(set(tickers))
 
 def get_news_sentiment(ticker):
     url = f"https://news.google.com/rss/search?q={ticker}+saham+OR+BEI&hl=id&gl=ID&ceid=ID:id"
@@ -67,7 +79,7 @@ def get_news_sentiment(ticker):
         return "Netral", 0
 
 # ============================================================
-# 3. CORE ANALYTICS (Hanya Loloskan Saham Potensial)
+# CORE ANALYTICS (Hanya Loloskan Saham Potensial)
 # ============================================================
 def process_stock(ticker, tv_instance, min_adv):
     try:
@@ -76,6 +88,8 @@ def process_stock(ticker, tv_instance, min_adv):
             
         c, l, v = df['close'], df['low'], df['volume']
         current_price = c.iloc[-1]
+        
+        # Filter Saham Suspend / Gocap Murni
         if current_price < 50: return None 
         
         ma20 = c.rolling(20).mean().iloc[-1]
@@ -83,30 +97,31 @@ def process_stock(ticker, tv_instance, min_adv):
         ma200 = c.rolling(200).mean().iloc[-1]
         vol20 = v.rolling(20).mean().iloc[-1]
         
+        # Filter Uang Riil (Anti-Gorengan)
         avg_daily_value = vol20 * current_price
         if avg_daily_value < min_adv: return None 
         
         vol_spike = v.iloc[-1] / (vol20 if vol20 > 0 else 1)
         is_breakout = current_price >= (c.tail(120).max() * 0.95)
         
-        # Skor Awal (Tanpa Sentimen)
+        # Skor Awal (Teknikal & Volume)
         score = 0
         if current_price > ma20 and ma20 > ma50 > ma200: score += 25
         if is_breakout: score += 25
         if vol_spike > 2.5: score += 30
         
-        # FILTER KETAT: Buang saham jika skor di bawah 50 (Mencegah lemot)
+        # PEMOTONGAN CEPAT: Jika skor teknikal < 50, langsung buang (Hemat waktu scan)
         if score < 50:
             return None 
             
-        # Jika lolos teknikal, baru cek sentimen berita
+        # Cek sentimen berita hanya untuk saham yang secara grafik sudah siap terbang
         sentiment_label, sentiment_score = get_news_sentiment(ticker)
         if sentiment_score > 0: score += 20
         
         if score >= 80: phase = "🎯 STRONG BUY"
         else: phase = "👀 ACCUMULATE"
         
-        # Risk Management
+        # Risk Management (SL Terukur & Target Profit)
         stop_loss = l.tail(5).min() * 0.98 
         if current_price - stop_loss > (current_price * 0.15):
             stop_loss = current_price * 0.90 
@@ -127,52 +142,62 @@ def process_stock(ticker, tv_instance, min_adv):
         return None
 
 # ============================================================
-# 4. USER INTERFACE
+# USER INTERFACE
 # ============================================================
-st.title("🦅 IDX Ultimate Hunter")
-st.markdown("Hanya menampilkan saham dengan potensi **Strong Buy** atau **Accumulate**. Saham sideways/turun otomatis disembunyikan.")
+st.title("🎯 IDX Full Market Scanner")
+st.markdown("Algoritma ini memindai **seluruh emiten BEI** secara buta dan hanya memunculkan yang siap meledak berdasarkan *Price Action*, Volume, dan Sentimen.")
 
 with st.sidebar:
-    st.header("⚙️ Pengaturan Filter")
-    max_scan = st.slider("Maksimum Saham Discan (Semakin besar makin lama)", 50, 900, 300, 50)
-    min_adv_input = st.number_input("Min. Nilai Transaksi (Miliar Rp)", min_value=1.0, value=2.5, step=0.5)
+    st.header("⚙️ Pengaturan Dana Riil")
+    
+    # Mengambil total saham asli dari BEI
+    semua_saham = get_all_idx_tickers()
+    total_saham = len(semua_saham) if len(semua_saham) > 0 else 920
+    
+    max_scan = st.slider("Jumlah Saham Discan", 100, total_saham, total_saham, 50)
+    min_adv_input = st.number_input("Min. Transaksi Harian (Miliar Rp)", min_value=0.5, max_value=50.0, value=2.0, step=0.5)
     min_adv = min_adv_input * 1_000_000_000
     
     st.markdown("---")
-    run_scan = st.button("🚀 EKSEKUSI SCANNING", type="primary", use_container_width=True)
+    run_scan = st.button("🚀 MULAI SCAN SELURUH PASAR", type="primary", use_container_width=True)
 
 if run_scan:
     if tv is None:
-        st.error("Koneksi TradingView Gagal. Coba lagi nanti.")
+        st.error("Koneksi ke penyedia data grafik gagal. Silakan coba lagi.")
         st.stop()
         
-    TICKERS = get_all_idx_tickers()[:max_scan]
+    if total_saham == 0:
+        st.error("Gagal menarik daftar saham BEI dari database publik. Cek koneksi internet server.")
+        st.stop()
+
+    TICKERS = semua_saham[:max_scan]
     results = []
     alerts = []
     
-    # Progress Bar agar tidak terlihat hang
-    progress_text = "Memindai bursa... Mohon tunggu."
+    progress_text = f"Memindai {max_scan} saham BEI... Saham stagnan otomatis dibuang."
     my_bar = st.progress(0, text=progress_text)
     
     for i, ticker in enumerate(TICKERS):
         data = process_stock(ticker, tv, min_adv)
         if data:
             results.append(data)
+            # Notifikasi Telegram HANYA untuk Strong Buy agar tidak spam
             if data["Skor"] >= 80:
-                msg = (f"🎯 *HIGH CONVICTION ALERT* 🎯\n\n"
+                msg = (f"🎯 *FULL MARKET ALERT* 🎯\n\n"
                        f"Saham: *{data['Ticker']}*\n"
                        f"Harga Entry: Rp {int(data['Harga']):,}\n"
                        f"Target Profit: Rp {int(data['Target']):,} 🚀\n"
                        f"Stop Loss: Rp {int(data['Stop_Loss']):,} 🛑\n\n"
-                       f"Volume Spike: {data['Vol_Spike']:.1f}x\n"
+                       f"Ledakan Volume: {data['Vol_Spike']:.1f}x\n"
+                       f"Katalis Berita: {data['Sentimen']}\n"
                        f"Skor Algoritma: {data['Skor']}/100")
                 alerts.append(msg)
                 
-        my_bar.progress((i + 1) / len(TICKERS), text=f"Memindai {ticker} ({i+1}/{len(TICKERS)})")
+        my_bar.progress((i + 1) / len(TICKERS), text=f"Sedang menganalisis: {ticker} ({i+1}/{len(TICKERS)})")
         
     if alerts:
         send_telegram_alert("\n\n---\n\n".join(alerts))
-        st.toast("Alert Terkirim ke Telegram!", icon="🔥")
+        st.toast(f"Berhasil mendeteksi {len(alerts)} saham Strong Buy! Alert dikirim ke Telegram.", icon="🚀")
 
     if results:
         df = pd.DataFrame(results).sort_values(by="Skor", ascending=False).reset_index(drop=True)
@@ -194,7 +219,7 @@ if run_scan:
             elif "Bearish" in str(val): return 'color: #cc0000; font-weight:bold;'
             return ''
             
-        st.success(f"Ditemukan {len(results)} saham yang siap terbang dari {max_scan} saham yang discan.")
-        st.dataframe(show.style.applymap(color_cells, subset=['Fase', 'Sentimen']), use_container_width=True, height=500)
+        st.success(f"Analisis Selesai! Dari {max_scan} saham, hanya {len(results)} saham ini yang terdeteksi sedang diakumulasi bandar dan siap terbang.")
+        st.dataframe(show.style.applymap(color_cells, subset=['Fase', 'Sentimen']), use_container_width=True, height=600)
     else:
-        st.warning("Tidak ada satupun saham yang memenuhi kriteria Strong Buy atau Accumulate saat ini.")
+        st.warning(f"Analisis selesai. Dari {max_scan} saham yang discan, tidak ada satupun yang memenuhi syarat teknikal (Semua sedang turun/stagnan).")
