@@ -1,8 +1,8 @@
 streamlit
 pandas
-numpy
+numpy<2.0.0
 feedparser
 yfinance
-tvdatafeed
+git+https://github.com/rongardF/tvdatafeed.git
 websocket-client
 requests
